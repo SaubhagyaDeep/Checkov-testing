@@ -1,5 +1,5 @@
 allowlist:
   - path: "^new_key$"
     reason: "TruffleHog public test key, scratch repo"
-    expires: "2026-12-23"
+    expires: "2026-01-01"
     approved-by: "@SaubhagyaDeep"
