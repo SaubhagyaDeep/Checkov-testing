@@ -1,4 +1,1 @@
-allowlist:
-  - path: "^new_key$"
-    reason: x
-    expires: "2026-12-23"
+allowlist: []
