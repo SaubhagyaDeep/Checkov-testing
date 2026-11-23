@@ -1,4 +1,4 @@
-# Checkov-testing-2
+# Checkov-testing
 testing checkov integration
 
 adding this should not trigger checkov scan as this is not terraform file
