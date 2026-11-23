@@ -5,9 +5,10 @@ Usage: process_findings.py RAW_JSONL ALLOWLIST_YAML OUT_DIR
 
 Raw secret material (the `Raw`/`RawV2`/`Redacted` fields) is never written out;
 only detector name, file, line and commit are kept. Writes to OUT_DIR:
-  findings.json  - redacted findings that survived the allowlist
-  comment.md     - sticky PR comment body (marker: <!-- trufflehog-report -->)
-and appends `count=<n>` to $GITHUB_OUTPUT when set.
+  findings.json    - redacted findings that survived the allowlist
+  suppressed.json  - redacted findings hidden by an allowlist entry (with reason / approver)
+  comment.md       - sticky PR comment body (marker: <!-- trufflehog-report -->)
+and appends `count=<n>` and `suppressed=<n>` to $GITHUB_OUTPUT when set.
 """
 import datetime
 import json
@@ -40,14 +41,14 @@ def load_allowlist(path, today):
     return active
 
 
-def is_allowed(finding, entries):
+def match_entry(finding, entries):
     for e in entries:
         if e.get("detector") and e["detector"] != finding["detector"]:
             continue
         if e.get("path") and not re.search(e["path"], finding["file"]):
             continue
-        return True
-    return False
+        return e
+    return None
 
 
 def parse(raw_path):
@@ -71,20 +72,37 @@ def parse(raw_path):
                 "line": git.get("line", 0),
                 "commit": git.get("commit", "?"),
             })
-    return findings
+    # de-duplicate (same secret can surface in several chunks)
+    unique = [dict(t) for t in {tuple(sorted(f.items())) for f in findings}]
+    unique.sort(key=lambda f: (f["file"], f["line"], f["detector"]))
+    return unique
+
+
+def cell(value, limit=120):
+    """Make allowlist free text safe for a markdown table cell."""
+    text = " ".join(str(value).split())[:limit]
+    return text.replace("|", "\\|").replace("<", "&lt;").replace("`", "'")
 
 
 def main():
     raw_path, allowlist_path, out_dir = sys.argv[1:4]
     entries = load_allowlist(allowlist_path, datetime.date.today())
-    findings = [f for f in parse(raw_path) if not is_allowed(f, entries)]
-    # de-duplicate (same secret can surface in several chunks)
-    findings = [dict(t) for t in {tuple(sorted(f.items())) for f in findings}]
-    findings.sort(key=lambda f: (f["file"], f["line"], f["detector"]))
+
+    findings, suppressed = [], []
+    for f in parse(raw_path):
+        entry = match_entry(f, entries)
+        if entry:
+            suppressed.append({**f, "reason": str(entry["reason"]),
+                               "approved_by": str(entry["approved-by"]),
+                               "expires": str(entry["expires"])})
+        else:
+            findings.append(f)
 
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "findings.json"), "w") as fh:
         json.dump(findings, fh, indent=2)
+    with open(os.path.join(out_dir, "suppressed.json"), "w") as fh:
+        json.dump(suppressed, fh, indent=2)
 
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -107,15 +125,31 @@ def main():
                          f"[{sha}]({server}/{repo}/commit/{f['commit']}) |")
         lines += ["", "> Secret values are intentionally not shown. To accept a finding, add an entry to "
                       "`.github/trufflehog/allowlist.yaml` (reason / expires / approved-by)."]
+    elif suppressed:
+        lines += [f"### TruffleHog — no un-allowlisted secrets ({len(suppressed)} allowlisted)"]
     else:
         lines += ["### TruffleHog — no verified secrets found on latest push"]
+
+    if suppressed:
+        lines += [
+            "",
+            f"<details><summary>{len(suppressed)} finding(s) suppressed by the allowlist — reviewers: check these</summary>",
+            "",
+            "| Detector | File | Line | Reason | Approved by | Expires |",
+            "|---|---|---|---|---|---|",
+        ]
+        for s in suppressed:
+            lines.append(f"| {s['detector']} | `{s['file']}` | {s['line']} | {cell(s['reason'])} | "
+                         f"{cell(s['approved_by'])} | {cell(s['expires'])} |")
+        lines += ["", "</details>"]
+
     with open(os.path.join(out_dir, "comment.md"), "w") as fh:
         fh.write("\n".join(lines) + "\n")
 
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-            fh.write(f"count={len(findings)}\n")
-    print(f"{len(findings)} finding(s) after allowlist")
+            fh.write(f"count={len(findings)}\nsuppressed={len(suppressed)}\n")
+    print(f"{len(findings)} finding(s) after allowlist, {len(suppressed)} suppressed")
 
 
 if __name__ == "__main__":

@@ -22,6 +22,9 @@ outputs:
   count:
     description: Number of findings after the allowlist
     value: ${{ steps.report.outputs.count }}
+  suppressed:
+    description: Number of findings hidden by allowlist entries
+    value: ${{ steps.report.outputs.suppressed }}
   report-dir:
     description: Directory containing comment.md and findings.json (redacted)
     value: ${{ steps.report.outputs.report-dir }}
