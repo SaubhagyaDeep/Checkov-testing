@@ -1,0 +1,65 @@
+name: TruffleHog verified-secret scan
+description: Scan a checked-out git repo with TruffleHog (verified only) and emit a redacted, allowlist-filtered report.
+
+inputs:
+  scan:
+    description: "pr = only commits between base-sha and head-sha; full = whole history"
+    default: pr
+  base-sha:
+    description: Base commit for a pr scan
+    default: ""
+  head-sha:
+    description: Head commit for a pr scan
+    default: ""
+  allowlist-file:
+    description: Path to the allowlist YAML to apply
+    required: true
+  image:
+    description: TruffleHog image, pinned by digest (v3.100.0)
+    default: ghcr.io/trufflesecurity/trufflehog@sha256:8fd07ea46a3f59583c4d50f006d8cf150530141b28969c3c34cc455cb9165a6b
+
+outputs:
+  count:
+    description: Number of findings after the allowlist
+    value: ${{ steps.report.outputs.count }}
+  report-dir:
+    description: Directory containing comment.md and findings.json (redacted)
+    value: ${{ steps.report.outputs.report-dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run TruffleHog (verified only)
+      shell: bash
+      env:
+        SCAN: ${{ inputs.scan }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        ARGS=()
+        if [ "$SCAN" = "pr" ]; then
+          ARGS=(--since-commit "$BASE_SHA" --branch "$HEAD_SHA")
+        fi
+        # Raw output holds secret values: keep it in RUNNER_TEMP, never log or upload it.
+        docker run --rm -v "$PWD":/repo:ro -w /repo "$IMAGE" \
+          git file:///repo ${ARGS[@]+"${ARGS[@]}"} \
+          --results=verified --json --no-update \
+          --force-skip-binaries --archive-max-size=5MB \
+          > "$RUNNER_TEMP/trufflehog-raw.jsonl"
+
+    - name: Redact and apply allowlist
+      id: report
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        ALLOWLIST: ${{ inputs.allowlist-file }}
+      run: |
+        set -euo pipefail
+        python3 -m venv "$RUNNER_TEMP/venv"
+        "$RUNNER_TEMP/venv/bin/pip" install --quiet pyyaml==6.0.2
+        "$RUNNER_TEMP/venv/bin/python" "$ACTION_PATH/process_findings.py" \
+          "$RUNNER_TEMP/trufflehog-raw.jsonl" "$ALLOWLIST" "$RUNNER_TEMP/trufflehog-out"
+        rm -f "$RUNNER_TEMP/trufflehog-raw.jsonl"
+        echo "report-dir=$RUNNER_TEMP/trufflehog-out" >> "$GITHUB_OUTPUT"
