@@ -49,7 +49,7 @@ jobs:
 
       - name: Scan
         id: scan
-        uses: SaubhagyaDeep/Checkov-testing-2/.github/actions/trufflehog-scan@c2cf6aa703454ff94c2e98b862e758957a2da7d5
+        uses: SaubhagyaDeep/Checkov-testing/.github/actions/trufflehog-scan@c2cf6aa703454ff94c2e98b862e758957a2da7d5
         with:
           scan: ${{ inputs.scan }}
           base-sha: ${{ github.event.pull_request.base.sha }}
