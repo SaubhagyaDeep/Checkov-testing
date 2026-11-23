@@ -1,0 +1,104 @@
+name: TruffleHog (reusable)
+
+# Callers: pin this workflow by commit SHA. Caller must grant
+#   permissions: { contents: read, pull-requests: write }
+# Monitoring mode by default; block with `mode: block` or the TRUFFLEHOG_ENFORCE variable.
+on:
+  workflow_call:
+    inputs:
+      scan:
+        description: "pr (PR commits only) or full (entire history)"
+        type: string
+        default: pr
+      mode:
+        description: "report (never fails) or block (fail on verified secrets)"
+        type: string
+        default: report
+    secrets:
+      SECOPS_SLACK_WEBHOOK_URL:
+        description: Slack incoming webhook for the SecOps channel (full scans only)
+        required: false
+
+jobs:
+  trufflehog:
+    name: TruffleHog verified-secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # PR scans read the allowlist from the BASE commit, so a PR cannot allowlist its own secret.
+      - name: Resolve allowlist
+        id: allowlist
+        env:
+          SCAN: ${{ inputs.scan }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          OUT="$RUNNER_TEMP/allowlist.yaml"
+          if [ "$SCAN" = "pr" ]; then
+            git show "$BASE_SHA:.github/trufflehog/allowlist.yaml" > "$OUT" 2>/dev/null || printf 'allowlist: []\n' > "$OUT"
+          elif [ -f .github/trufflehog/allowlist.yaml ]; then
+            cp .github/trufflehog/allowlist.yaml "$OUT"
+          else
+            printf 'allowlist: []\n' > "$OUT"
+          fi
+          echo "file=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Scan
+        id: scan
+        uses: SaubhagyaDeep/Checkov-testing-2/.github/actions/trufflehog-scan@c2cf6aa703454ff94c2e98b862e758957a2da7d5
+        with:
+          scan: ${{ inputs.scan }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          allowlist-file: ${{ steps.allowlist.outputs.file }}
+
+      - name: Write job summary
+        run: cat "${{ steps.scan.outputs.report-dir }}/comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Find existing TruffleHog PR comment
+        if: inputs.scan == 'pr'
+        id: find-comment
+        uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad # v4
+        continue-on-error: true
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- trufflehog-report -->'
+
+      - name: Post or update TruffleHog PR comment
+        if: inputs.scan == 'pr' && (steps.scan.outputs.count != '0' || steps.find-comment.outputs.comment-id != '')
+        uses: peter-evans/create-or-update-comment@71345be0265236311c031f5c7866368bd1eff043 # v4
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: ${{ steps.scan.outputs.report-dir }}/comment.md
+          edit-mode: replace
+
+      - name: Notify SecOps Slack channel
+        if: inputs.scan == 'full' && steps.scan.outputs.count != '0'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SECOPS_SLACK_WEBHOOK_URL }}
+          COUNT: ${{ steps.scan.outputs.count }}
+          REPORT_DIR: ${{ steps.scan.outputs.report-dir }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::error::SECOPS_SLACK_WEBHOOK_URL secret is not configured"
+            exit 1
+          fi
+          # Redacted summary only: detector, file:line, short commit. Capped at 20 rows.
+          DETAILS=$(jq -r '.[:20][] | "• \(.detector) — \(.file):\(.line) (\(.commit[0:10]))"' "$REPORT_DIR/findings.json")
+          jq -n --arg text "*TruffleHog: $COUNT verified secret(s) in ${GITHUB_REPOSITORY}* (full-history scan)
+          $DETAILS
+          <$RUN_URL|View run>" '{text: $text}' \
+            | curl -sSf -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK_URL"
+
+      - name: Fail on verified secrets (block mode only)
+        if: (inputs.mode == 'block' || vars.TRUFFLEHOG_ENFORCE == 'true') && inputs.scan == 'pr' && steps.scan.outputs.count != '0'
+        run: |
+          echo "::error::TruffleHog found ${{ steps.scan.outputs.count }} verified secret(s). See the PR comment."
+          exit 1
