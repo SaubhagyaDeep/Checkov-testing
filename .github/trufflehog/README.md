@@ -26,3 +26,4 @@ Add `.github/trufflehog/allowlist.yaml` (`allowlist: []`) and a CODEOWNERS entry
 
 ## Allowlist
 Entries apply in the same PR; suppressed findings are listed in the PR comment. Require code-owner review on the file.
+caller test
