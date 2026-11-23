@@ -30,17 +30,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # PR scans read the allowlist from the BASE commit, so a PR cannot allowlist its own secret.
+      # The allowlist comes from the checked-out tree, so an entry added in the same PR applies.
+      # Every suppressed finding is listed in the PR comment for reviewers; protect the file with CODEOWNERS.
       - name: Resolve allowlist
         id: allowlist
-        env:
-          SCAN: ${{ inputs.scan }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           OUT="$RUNNER_TEMP/allowlist.yaml"
-          if [ "$SCAN" = "pr" ]; then
-            git show "$BASE_SHA:.github/trufflehog/allowlist.yaml" > "$OUT" 2>/dev/null || printf 'allowlist: []\n' > "$OUT"
-          elif [ -f .github/trufflehog/allowlist.yaml ]; then
+          if [ -f .github/trufflehog/allowlist.yaml ]; then
             cp .github/trufflehog/allowlist.yaml "$OUT"
           else
             printf 'allowlist: []\n' > "$OUT"
@@ -49,7 +45,7 @@ jobs:
 
       - name: Scan
         id: scan
-        uses: SaubhagyaDeep/Checkov-testing/.github/actions/trufflehog-scan@c2cf6aa703454ff94c2e98b862e758957a2da7d5
+        uses: SaubhagyaDeep/Checkov-testing/.github/actions/trufflehog-scan@790f119073fd43f99ef2597165fac2ed18ddb5f9
         with:
           scan: ${{ inputs.scan }}
           base-sha: ${{ github.event.pull_request.base.sha }}
@@ -70,7 +66,7 @@ jobs:
           body-includes: '<!-- trufflehog-report -->'
 
       - name: Post or update TruffleHog PR comment
-        if: inputs.scan == 'pr' && (steps.scan.outputs.count != '0' || steps.find-comment.outputs.comment-id != '')
+        if: inputs.scan == 'pr' && (steps.scan.outputs.count != '0' || steps.scan.outputs.suppressed != '0' || steps.find-comment.outputs.comment-id != '')
         uses: peter-evans/create-or-update-comment@71345be0265236311c031f5c7866368bd1eff043 # v4
         with:
           comment-id: ${{ steps.find-comment.outputs.comment-id }}

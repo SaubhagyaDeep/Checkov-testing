@@ -1,20 +1,28 @@
-# TruffleHog secret scanning
+# TruffleHog shared workflow
 
-- `../workflows/trufflehog-pr.yml` — every PR to `main`; scans only the PR's commits, verified secrets only.
-  Posts one sticky, redacted comment (no secret values).
-- `../workflows/trufflehog-full-scan.yml` — 1st/15th of each month + manual; full history. Verified findings
-  go to the SecOps Slack channel (secret `SECOPS_SLACK_WEBHOOK_URL`).
-- `allowlist.yaml` — reviewable exceptions. Each entry needs `reason`, `expires` (≤180 days), `approved-by`.
-  Expired entries stop applying automatically.
-- `process_findings.py` — strips raw secret material, applies the allowlist, builds the comment.
+- `.github/actions/trufflehog-scan` — composite action: scan (verified only, image pinned by digest), redact, apply allowlist.
+- `.github/workflows/trufflehog.yml` — `workflow_call` wrapper: sticky PR comment, Slack alert on full scans, optional blocking.
+- `.github/workflows/trufflehog-scan.yml` — this repo's own caller.
 
-## Monitoring → blocking
-The PR check never fails on findings until the repo/org variable `TRUFFLEHOG_ENFORCE` is set to `true`.
-Flip it once the full-history scan is clean (or every remaining finding is rotated or allowlisted).
-Then add the `TruffleHog verified-secret scan` job as a required status check on `main`.
+## Using it from another repo
+Pin the workflow by commit SHA (tell the caller to bump it after each release: change the action, then bump the SHA in `trufflehog.yml`).
 
-## Upgrading TruffleHog
-Bump the image digest in both workflows together. Get it with:
-`gh api repos/trufflesecurity/trufflehog/releases/latest --jq .tag_name`, then read the
-`docker-content-digest` header for `ghcr.io/trufflesecurity/trufflehog:<version without v>`.
-Action commit for v3.100.0 (if you prefer the action): `d232362a64a09a9e7d58267b8f5acef00ae90e23`.
+```yaml
+name: TruffleHog
+on:
+  pull_request: { branches: [main] }
+  schedule: [{ cron: '0 6 1,15 * *' }]   # full history
+  workflow_dispatch:
+permissions: { contents: read, pull-requests: write }
+jobs:
+  trufflehog:
+    uses: SaubhagyaDeep/Checkov-testing/.github/workflows/trufflehog.yml@<commit-sha>
+    with:
+      scan: ${{ github.event_name == 'pull_request' && 'pr' || 'full' }}
+      mode: report        # report | block
+    secrets: inherit
+```
+Add `.github/trufflehog/allowlist.yaml` (`allowlist: []`) and a CODEOWNERS entry for it.
+
+## Allowlist
+Entries apply in the same PR; suppressed findings are listed in the PR comment. Require code-owner review on the file.

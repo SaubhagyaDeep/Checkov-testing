@@ -1,14 +1,4 @@
-# TruffleHog allowlist — every entry needs a reason, an expiry and an approver.
-# Reviewed via CODEOWNERS / PR review like any other change.
-#
-# Entry format:
-#   - path: "^regex/of/file/path$"   # required unless `detector` is set (Python regex, matched with re.search)
-#     detector: "AWS"                # optional; exact TruffleHog detector name
-#     reason: "one-line justification"
-#     expires: "YYYY-MM-DD"          # max 180 days out; expired entries stop suppressing findings
-#     approved-by: "@github-handle"
-#
-# Prefer rotating/removing the secret over allowlisting it. Only *verified*
-# (live) secrets are reported, so an allowlisted entry should be rare.
-
+# Exceptions need reason, expires (<=180 days out) and approved-by.
+# Entries apply in the same PR that adds them; every suppressed finding is listed in the PR comment.
+# CODEOWNERS requires security review of this file (enable "Require review from Code Owners" on main).
 allowlist: []
