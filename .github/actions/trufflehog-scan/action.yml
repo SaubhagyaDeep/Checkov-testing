@@ -76,7 +76,7 @@ runs:
           echo "::error::invalid show-secret value: $SHOW_SECRET"; exit 1
         fi
         python3 -m venv "$RUNNER_TEMP/venv"
-        "$RUNNER_TEMP/venv/bin/pip" install --quiet pyyaml==6.0.2
+        "$RUNNER_TEMP/venv/bin/pip" install --quiet pyyaml==6.0.4
         "$RUNNER_TEMP/venv/bin/python" "$ACTION_PATH/process_findings.py" \
           "$RUNNER_TEMP/trufflehog-raw.jsonl" "$ALLOWLIST" "$RUNNER_TEMP/trufflehog-out" \
           --show-secret "$SHOW_SECRET"
