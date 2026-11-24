@@ -42,3 +42,11 @@ Entries apply in the same PR; suppressed findings are listed in the PR comment. 
 Needs secret `SLACK_BOT_TOKEN` and variable `SECOPS_SLACK_CHANNEL_ID` in the **caller** repo (or org); the bot needs `chat:write` and must be in the channel.
 Optional variable `SECOPS_SLACK_MENTIONS` (e.g. `<@U01ABC> <@U02DEF>`, Slack member IDs) pings people when there are findings.
 Input `notify-slack: always` also posts an all-clear; the default `findings` posts only when something is found.
+
+## Showing a hint of the secret
+Input `show-secret: none | redacted` (default `none`). `redacted` adds a Hint column to the PR comment with TruffleHog's partial value
+(e.g. the AWS access key **ID**; never the secret half). Raw secret values are never shown, logged or posted. Slack never includes the hint.
+
+## PR scans cover every commit in the PR
+A key added in one commit and removed in a later commit of the same PR still blocks: the commit would enter `main`'s history.
+Revoke the key, then drop/squash that commit (or allowlist the finding). Squash-only merges keep such commits out of `main`.
