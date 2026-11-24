@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Bumps SHA-pinned actions/workflows (and their version comments) via reviewable PRs.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /.github/actions/trufflehog-scan
+    schedule:
+      interval: weekly

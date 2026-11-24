@@ -2,7 +2,8 @@ name: TruffleHog (reusable)
 
 # Callers: pin this workflow by commit SHA. Caller must grant
 #   permissions: { contents: read, pull-requests: write }
-# Monitoring mode by default; block with `mode: block` or the TRUFFLEHOG_ENFORCE variable.
+# Monitoring mode by default; block on ANY finding with `mode: block` or the TRUFFLEHOG_ENFORCE variable.
+# `results` defaults to verified,unverified; set `results: verified` per repo for low noise.
 on:
   workflow_call:
     inputs:
@@ -10,6 +11,10 @@ on:
         description: "pr (PR commits only) or full (entire history)"
         type: string
         default: pr
+      results:
+        description: "TruffleHog result types: verified, unverified, unknown, filtered_unverified (comma-separated)"
+        type: string
+        default: verified,unverified
       mode:
         description: "report (never fails) or block (fail on verified secrets)"
         type: string
@@ -21,7 +26,7 @@ on:
 
 jobs:
   trufflehog:
-    name: TruffleHog verified-secret scan
+    name: TruffleHog secret scan
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -45,9 +50,10 @@ jobs:
 
       - name: Scan
         id: scan
-        uses: SaubhagyaDeep/Checkov-testing/.github/actions/trufflehog-scan@790f119073fd43f99ef2597165fac2ed18ddb5f9
+        uses: SaubhagyaDeep/Checkov-testing/.github/actions/trufflehog-scan@83f14c4794095e26fd68fd41b3863107e5080c17
         with:
           scan: ${{ inputs.scan }}
+          results: ${{ inputs.results }}
           base-sha: ${{ github.event.pull_request.base.sha }}
           head-sha: ${{ github.event.pull_request.head.sha }}
           allowlist-file: ${{ steps.allowlist.outputs.file }}
@@ -87,8 +93,9 @@ jobs:
             exit 1
           fi
           # Redacted summary only: detector, file:line, short commit. Capped at 20 rows.
+          VERIFIED=$(jq '[.[]|select(.verified)]|length' "$REPORT_DIR/findings.json")
           DETAILS=$(jq -r '.[:20][] | "• \(.detector) — \(.file):\(.line) (\(.commit[0:10]))"' "$REPORT_DIR/findings.json")
-          jq -n --arg text "*TruffleHog: $COUNT verified secret(s) in ${GITHUB_REPOSITORY}* (full-history scan)
+          jq -n --arg text "*TruffleHog: $COUNT secret(s) ($VERIFIED verified) in ${GITHUB_REPOSITORY}* (full-history scan)
           $DETAILS
           <$RUN_URL|View run>" '{text: $text}' \
             | curl -sSf -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK_URL"
@@ -96,5 +103,5 @@ jobs:
       - name: Fail on verified secrets (block mode only)
         if: (inputs.mode == 'block' || vars.TRUFFLEHOG_ENFORCE == 'true') && inputs.scan == 'pr' && steps.scan.outputs.count != '0'
         run: |
-          echo "::error::TruffleHog found ${{ steps.scan.outputs.count }} verified secret(s). See the PR comment."
+          echo "::error::TruffleHog found ${{ steps.scan.outputs.count }} secret(s). See the PR comment."
           exit 1
