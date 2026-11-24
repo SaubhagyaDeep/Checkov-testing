@@ -105,11 +105,13 @@ jobs:
             TEXT=":white_check_mark: *TruffleHog: no secrets found* in ${GITHUB_REPOSITORY} (full-history scan) <$RUN_URL|View run>"
           else
             VERIFIED=$(jq '[.[]|select(.verified)]|length' "$REPORT_DIR/findings.json")
-            # Redacted summary only: detector, file:line, short commit. Capped at 20 rows.
-            DETAILS=$(jq -r '.[:20][] | "• \(.detector) — \(.file):\(.line) (\(.commit[0:10]))"' "$REPORT_DIR/findings.json" | esc)
+            # Redacted table only: detector, file:line, short commit. Capped at 20 rows, aligned in a code block.
+            TABLE=$( { printf 'Detector\tFile path\tCommit\n'; \
+              jq -r '.[:20][] | [.detector, "\(.file):\(.line)", .commit[0:10]] | @tsv' "$REPORT_DIR/findings.json"; } \
+              | column -t -s "$(printf '\t')" | esc)
             TEXT=":rotating_light: *TruffleHog: $COUNT secret(s) ($VERIFIED verified)* in ${GITHUB_REPOSITORY} (full-history scan)"
-            if [ -n "$MENTIONS" ]; then TEXT="$TEXT"$'\n'"$MENTIONS"; fi
-            TEXT="$TEXT"$'\n'"$DETAILS"$'\n'"<$RUN_URL|View run>"
+            if [ -n "$MENTIONS" ]; then TEXT="$TEXT"$'\n'"$MENTIONS pls look into this:"; fi
+            TEXT="$TEXT"$'\n''```'$'\n'"$TABLE"$'\n''```'$'\n'"<$RUN_URL|View run>"
           fi
           RESP=$(jq -n --arg channel "$SLACK_CHANNEL" --arg text "$TEXT" '{channel: $channel, text: $text}' \
             | curl -sS -X POST https://slack.com/api/chat.postMessage \

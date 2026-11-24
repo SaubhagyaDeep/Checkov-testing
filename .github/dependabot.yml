@@ -1,13 +1,10 @@
 version: 2
 updates:
-  # TESTING cadence (hourly cron). Switch back to `interval: weekly` after verifying.
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: cron
-      cronjob: "0 * * * *"
+      interval: weekly
   - package-ecosystem: github-actions
     directory: /.github/actions/trufflehog-scan
     schedule:
-      interval: cron
-      cronjob: "0 * * * *"
+      interval: weekly
