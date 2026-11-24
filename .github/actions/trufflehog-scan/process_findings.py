@@ -31,12 +31,13 @@ def load_allowlist(path, today):
         missing = [k for k in REQUIRED if not entry.get(k)]
         if missing or not (entry.get("path") or entry.get("detector")):
             sys.exit(f"allowlist entry #{i + 1} invalid: needs {REQUIRED} and path or detector")
-        expires = datetime.date.fromisoformat(str(entry["expires"]))
-        if (expires - today).days > MAX_EXPIRY_DAYS:
-            sys.exit(f"allowlist entry #{i + 1}: expires more than {MAX_EXPIRY_DAYS} days out")
-        if expires < today:
-            print(f"::warning::allowlist entry #{i + 1} expired on {expires}; no longer applied")
-            continue
+        if str(entry["expires"]).strip().lower() != "never":
+            expires = datetime.date.fromisoformat(str(entry["expires"]))
+            if (expires - today).days > MAX_EXPIRY_DAYS:
+                sys.exit(f"allowlist entry #{i + 1}: expires more than {MAX_EXPIRY_DAYS} days out (use a nearer date or `never`)")
+            if expires < today:
+                print(f"::warning::allowlist entry #{i + 1} expired on {expires}; no longer applied")
+                continue
         active.append(entry)
     return active
 

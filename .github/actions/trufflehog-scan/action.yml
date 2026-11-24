@@ -1,5 +1,5 @@
-name: TruffleHog verified-secret scan
-description: Scan a checked-out git repo with TruffleHog (verified only) and emit a redacted, allowlist-filtered report.
+name: TruffleHog secret scan
+description: Scan a checked-out git repo with TruffleHog and emit a redacted, allowlist-filtered report.
 
 inputs:
   scan:
@@ -14,6 +14,9 @@ inputs:
   allowlist-file:
     description: Path to the allowlist YAML to apply
     required: true
+  results:
+    description: "Comma-separated TruffleHog result types: verified, unverified, unknown, filtered_unverified"
+    default: verified,unverified
   image:
     description: TruffleHog image, pinned by digest (v3.100.0)
     default: ghcr.io/trufflesecurity/trufflehog@sha256:8fd07ea46a3f59583c4d50f006d8cf150530141b28969c3c34cc455cb9165a6b
@@ -32,15 +35,20 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Run TruffleHog (verified only)
+    - name: Run TruffleHog
       shell: bash
       env:
         SCAN: ${{ inputs.scan }}
         BASE_SHA: ${{ inputs.base-sha }}
         HEAD_SHA: ${{ inputs.head-sha }}
         IMAGE: ${{ inputs.image }}
+        RESULTS: ${{ inputs.results }}
       run: |
         set -euo pipefail
+        T='(verified|unverified|unknown|filtered_unverified)'
+        if ! [[ "$RESULTS" =~ ^$T(,$T)*$ ]]; then
+          echo "::error::invalid results value: $RESULTS"; exit 1
+        fi
         ARGS=()
         if [ "$SCAN" = "pr" ]; then
           ARGS=(--since-commit "$BASE_SHA" --branch "$HEAD_SHA")
@@ -48,7 +56,7 @@ runs:
         # Raw output holds secret values: keep it in RUNNER_TEMP, never log or upload it.
         docker run --rm -v "$PWD":/repo:ro -w /repo "$IMAGE" \
           git file:///repo ${ARGS[@]+"${ARGS[@]}"} \
-          --results=verified --json --no-update \
+          --results="$RESULTS" --json --no-update \
           --force-skip-binaries --archive-max-size=5MB \
           > "$RUNNER_TEMP/trufflehog-raw.jsonl"
 
