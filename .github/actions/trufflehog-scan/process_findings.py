@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Turn raw TruffleHog JSON lines into a redacted, allowlist-filtered report.
 
-Usage: process_findings.py RAW_JSONL ALLOWLIST_YAML OUT_DIR
+Usage: process_findings.py RAW_JSONL ALLOWLIST_YAML OUT_DIR [--show-secret none|redacted]
 
-Raw secret material (the `Raw`/`RawV2`/`Redacted` fields) is never written out;
-only detector name, file, line and commit are kept. Writes to OUT_DIR:
+The `Raw`/`RawV2` fields are never written out; only detector name, file, line and
+commit are kept. With `--show-secret redacted` TruffleHog's partial `Redacted` hint
+(e.g. the AWS key ID, never the secret part) is also kept and shown as a Hint column. Writes to OUT_DIR:
   findings.json    - redacted findings that survived the allowlist
   suppressed.json  - redacted findings hidden by an allowlist entry (with reason / approver)
   comment.md       - sticky PR comment body (marker: <!-- trufflehog-report -->)
 and appends `count=<n>` and `suppressed=<n>` to $GITHUB_OUTPUT when set.
 """
+import argparse
 import datetime
 import json
 import os
@@ -52,7 +54,7 @@ def match_entry(finding, entries):
     return None
 
 
-def parse(raw_path):
+def parse(raw_path, show_hint=False):
     findings = []
     with open(raw_path) as fh:
         for line in fh:
@@ -66,13 +68,16 @@ def parse(raw_path):
             if "DetectorName" not in obj:
                 continue
             git = (obj.get("SourceMetadata") or {}).get("Data", {}).get("Git", {})
-            findings.append({
+            finding = {
                 "detector": obj["DetectorName"],
                 "verified": bool(obj.get("Verified")),
                 "file": git.get("file", "?"),
                 "line": git.get("line", 0),
                 "commit": git.get("commit", "?"),
-            })
+            }
+            if show_hint:
+                finding["hint"] = str(obj.get("Redacted") or "")
+            findings.append(finding)
     # de-duplicate (same secret can surface in several chunks)
     unique = [dict(t) for t in {tuple(sorted(f.items())) for f in findings}]
     unique.sort(key=lambda f: (f["file"], f["line"], f["detector"]))
@@ -86,11 +91,18 @@ def cell(value, limit=120):
 
 
 def main():
-    raw_path, allowlist_path, out_dir = sys.argv[1:4]
+    ap = argparse.ArgumentParser()
+    ap.add_argument("raw_path")
+    ap.add_argument("allowlist_path")
+    ap.add_argument("out_dir")
+    ap.add_argument("--show-secret", choices=("none", "redacted"), default="none")
+    args = ap.parse_args()
+    raw_path, allowlist_path, out_dir = args.raw_path, args.allowlist_path, args.out_dir
+    show_hint = args.show_secret == "redacted"
     entries = load_allowlist(allowlist_path, datetime.date.today())
 
     findings, suppressed = [], []
-    for f in parse(raw_path):
+    for f in parse(raw_path, show_hint):
         entry = match_entry(f, entries)
         if entry:
             suppressed.append({**f, "reason": str(entry["reason"]),
@@ -116,14 +128,15 @@ def main():
             "Verified credentials are **live**. Rotate them, then remove them from the branch "
             "(rotation matters more than rewriting history).",
             "",
-            "| Detector | Status | File | Line | Commit |",
-            "|---|---|---|---|---|",
+            "| Detector | Status | File | Line | Commit |" + (" Hint |" if show_hint else ""),
+            "|---|---|---|---|---|" + ("---|" if show_hint else ""),
         ]
         for f in findings:
             sha = f["commit"][:10]
             status = "verified" if f["verified"] else "unverified"
+            hint = f" `{cell(f['hint'], 40)}` |" if show_hint else ""
             lines.append(f"| {f['detector']} | {status} | `{f['file']}` | {f['line']} | "
-                         f"[{sha}]({server}/{repo}/commit/{f['commit']}) |")
+                         f"[{sha}]({server}/{repo}/commit/{f['commit']}) |{hint}")
         lines += ["", "> Secret values are intentionally not shown. To accept a finding, add an entry to "
                       "`.github/trufflehog/allowlist.yaml` (reason / expires / approved-by)."]
     elif suppressed:

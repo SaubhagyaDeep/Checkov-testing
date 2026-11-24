@@ -17,9 +17,12 @@ inputs:
   results:
     description: "Comma-separated TruffleHog result types: verified, unverified, unknown, filtered_unverified"
     default: verified,unverified
+  show-secret:
+    description: "none = never show anything about the secret; redacted = add TruffleHog's partial hint (e.g. AWS key ID) to the report"
+    default: none
   image:
-    description: TruffleHog image, pinned by digest (v3.100.0)
-    default: ghcr.io/trufflesecurity/trufflehog@sha256:8fd07ea46a3f59583c4d50f006d8cf150530141b28969c3c34cc455cb9165a6b
+    description: TruffleHog image, pinned by digest (v3.100.1)
+    default: ghcr.io/trufflesecurity/trufflehog@sha256:9c7a8325d43a4af2960d3f21d61a08981d8a1bf0542e007efa2e47097e386452
 
 outputs:
   count:
@@ -66,11 +69,16 @@ runs:
       env:
         ACTION_PATH: ${{ github.action_path }}
         ALLOWLIST: ${{ inputs.allowlist-file }}
+        SHOW_SECRET: ${{ inputs.show-secret }}
       run: |
         set -euo pipefail
+        if [ "$SHOW_SECRET" != "none" ] && [ "$SHOW_SECRET" != "redacted" ]; then
+          echo "::error::invalid show-secret value: $SHOW_SECRET"; exit 1
+        fi
         python3 -m venv "$RUNNER_TEMP/venv"
         "$RUNNER_TEMP/venv/bin/pip" install --quiet pyyaml==6.0.2
         "$RUNNER_TEMP/venv/bin/python" "$ACTION_PATH/process_findings.py" \
-          "$RUNNER_TEMP/trufflehog-raw.jsonl" "$ALLOWLIST" "$RUNNER_TEMP/trufflehog-out"
+          "$RUNNER_TEMP/trufflehog-raw.jsonl" "$ALLOWLIST" "$RUNNER_TEMP/trufflehog-out" \
+          --show-secret "$SHOW_SECRET"
         rm -f "$RUNNER_TEMP/trufflehog-raw.jsonl"
         echo "report-dir=$RUNNER_TEMP/trufflehog-out" >> "$GITHUB_OUTPUT"
