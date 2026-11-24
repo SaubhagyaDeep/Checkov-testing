@@ -15,13 +15,17 @@ on:
         description: "TruffleHog result types: verified, unverified, unknown, filtered_unverified (comma-separated)"
         type: string
         default: verified,unverified
+      notify-slack:
+        description: "findings (Slack only when a full scan finds something) or always (also post an all-clear)"
+        type: string
+        default: findings
       mode:
         description: "report (never fails) or block (fail on verified secrets)"
         type: string
         default: report
     secrets:
-      SECOPS_SLACK_WEBHOOK_URL:
-        description: Slack incoming webhook for the SecOps channel (full scans only)
+      SLACK_BOT_TOKEN:
+        description: Slack bot token (chat:write, bot must be in the channel); full scans only
         required: false
 
 jobs:
@@ -80,25 +84,41 @@ jobs:
           body-path: ${{ steps.scan.outputs.report-dir }}/comment.md
           edit-mode: replace
 
-      - name: Notify SecOps Slack channel
-        if: inputs.scan == 'full' && steps.scan.outputs.count != '0'
+      # Needs secret SLACK_BOT_TOKEN and variable SECOPS_SLACK_CHANNEL_ID in the caller repo (or org).
+      # Optional variable SECOPS_SLACK_MENTIONS, e.g. "<@U01ABC> <@U02DEF>" (Slack member IDs), pinged on findings.
+      - name: Notify Slack
+        if: inputs.scan == 'full' && (steps.scan.outputs.count != '0' || inputs.notify-slack == 'always')
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SECOPS_SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ vars.SECOPS_SLACK_CHANNEL_ID }}
+          MENTIONS: ${{ vars.SECOPS_SLACK_MENTIONS }}
           COUNT: ${{ steps.scan.outputs.count }}
           REPORT_DIR: ${{ steps.scan.outputs.report-dir }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "::error::SECOPS_SLACK_WEBHOOK_URL secret is not configured"
+          if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_CHANNEL" ]; then
+            echo "::error::SLACK_BOT_TOKEN secret and SECOPS_SLACK_CHANNEL_ID variable are required"
             exit 1
           fi
-          # Redacted summary only: detector, file:line, short commit. Capped at 20 rows.
-          VERIFIED=$(jq '[.[]|select(.verified)]|length' "$REPORT_DIR/findings.json")
-          DETAILS=$(jq -r '.[:20][] | "• \(.detector) — \(.file):\(.line) (\(.commit[0:10]))"' "$REPORT_DIR/findings.json")
-          jq -n --arg text "*TruffleHog: $COUNT secret(s) ($VERIFIED verified) in ${GITHUB_REPOSITORY}* (full-history scan)
-          $DETAILS
-          <$RUN_URL|View run>" '{text: $text}' \
-            | curl -sSf -X POST -H 'Content-type: application/json' --data @- "$SLACK_WEBHOOK_URL"
+          esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+          if [ "$COUNT" = "0" ]; then
+            TEXT=":white_check_mark: *TruffleHog: no secrets found* in ${GITHUB_REPOSITORY} (full-history scan) <$RUN_URL|View run>"
+          else
+            VERIFIED=$(jq '[.[]|select(.verified)]|length' "$REPORT_DIR/findings.json")
+            # Redacted summary only: detector, file:line, short commit. Capped at 20 rows.
+            DETAILS=$(jq -r '.[:20][] | "• \(.detector) — \(.file):\(.line) (\(.commit[0:10]))"' "$REPORT_DIR/findings.json" | esc)
+            TEXT=":rotating_light: *TruffleHog: $COUNT secret(s) ($VERIFIED verified)* in ${GITHUB_REPOSITORY} (full-history scan)"
+            if [ -n "$MENTIONS" ]; then TEXT="$TEXT"$'\n'"$MENTIONS"; fi
+            TEXT="$TEXT"$'\n'"$DETAILS"$'\n'"<$RUN_URL|View run>"
+          fi
+          RESP=$(jq -n --arg channel "$SLACK_CHANNEL" --arg text "$TEXT" '{channel: $channel, text: $text}' \
+            | curl -sS -X POST https://slack.com/api/chat.postMessage \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H 'Content-type: application/json; charset=utf-8' --data @-)
+          if ! echo "$RESP" | jq -e '.ok' >/dev/null; then
+            echo "::error::Slack API error: $(echo "$RESP" | jq -r '.error // "unknown"')"
+            exit 1
+          fi
 
       - name: Fail on verified secrets (block mode only)
         if: (inputs.mode == 'block' || vars.TRUFFLEHOG_ENFORCE == 'true') && inputs.scan == 'pr' && steps.scan.outputs.count != '0'
