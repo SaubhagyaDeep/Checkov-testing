@@ -38,7 +38,7 @@ Add `.github/trufflehog/allowlist.yaml` (`allowlist: []`) and a CODEOWNERS entry
 Entries apply in the same PR; suppressed findings are listed in the PR comment. Require code-owner review on the file.
 `expires` is a date (max 180 days out) or `never`. `reason` and `approved-by` are always required.
 
-## Slack (full scans)
+## Slack (PR and full scans)
 Needs secret `SLACK_BOT_TOKEN` and variable `SECOPS_SLACK_CHANNEL_ID` in the **caller** repo (or org); the bot needs `chat:write` and must be in the channel.
 Optional variable `SECOPS_SLACK_MENTIONS` (e.g. `<@U01ABC> <@U02DEF>`, Slack member IDs) pings people when there are findings.
 Input `notify-slack: always` also posts an all-clear; the default `findings` posts only when something is found.

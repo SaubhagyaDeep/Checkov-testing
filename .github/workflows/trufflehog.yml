@@ -16,7 +16,7 @@ on:
         type: string
         default: verified,unverified
       notify-slack:
-        description: "findings (Slack only when a full scan finds something) or always (also post an all-clear)"
+        description: "findings (Slack only when a scan finds something) or always (also post an all-clear)"
         type: string
         default: findings
       mode:
@@ -25,7 +25,7 @@ on:
         default: report
     secrets:
       SLACK_BOT_TOKEN:
-        description: Slack bot token (chat:write, bot must be in the channel); full scans only
+        description: Slack bot token (chat:write, bot must be in the channel); PR and full scans
         required: false
 
 jobs:
@@ -84,32 +84,40 @@ jobs:
           body-path: ${{ steps.scan.outputs.report-dir }}/comment.md
           edit-mode: replace
 
-      # Needs secret SLACK_BOT_TOKEN and variable SECOPS_SLACK_CHANNEL_ID in the caller repo (or org).
+      # Runs for PR and full scans. Needs secret SLACK_BOT_TOKEN and variable SECOPS_SLACK_CHANNEL_ID in the caller repo (or org).
       # Optional variable SECOPS_SLACK_MENTIONS, e.g. "<@U01ABC> <@U02DEF>" (Slack member IDs), pinged on findings.
       - name: Notify Slack
-        if: inputs.scan == 'full' && (steps.scan.outputs.count != '0' || inputs.notify-slack == 'always')
+        if: steps.scan.outputs.count != '0' || inputs.notify-slack == 'always'
+        continue-on-error: true  # a Slack outage or missing secret (e.g. fork/Dependabot PRs) must not fail the scan
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ vars.SECOPS_SLACK_CHANNEL_ID }}
           MENTIONS: ${{ vars.SECOPS_SLACK_MENTIONS }}
           COUNT: ${{ steps.scan.outputs.count }}
           REPORT_DIR: ${{ steps.scan.outputs.report-dir }}
+          SCAN: ${{ inputs.scan }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_CHANNEL" ]; then
             echo "::error::SLACK_BOT_TOKEN secret and SECOPS_SLACK_CHANNEL_ID variable are required"
             exit 1
           fi
+          if [ "$SCAN" = "pr" ]; then
+            SCAN_LABEL="PR #${PR_NUMBER} scan"
+          else
+            SCAN_LABEL="full-history scan"
+          fi
           esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
           if [ "$COUNT" = "0" ]; then
-            TEXT=":white_check_mark: *TruffleHog: no secrets found* in ${GITHUB_REPOSITORY} (full-history scan) <$RUN_URL|View run>"
+            TEXT=":white_check_mark: *TruffleHog: no secrets found* in ${GITHUB_REPOSITORY} ($SCAN_LABEL) <$RUN_URL|View run>"
           else
             VERIFIED=$(jq '[.[]|select(.verified)]|length' "$REPORT_DIR/findings.json")
             # Redacted table only: detector, file:line, short commit. Capped at 20 rows, aligned in a code block.
             TABLE=$( { printf 'Detector\tFile path\tCommit\n'; \
               jq -r '.[:20][] | [.detector, "\(.file):\(.line)", .commit[0:10]] | @tsv' "$REPORT_DIR/findings.json"; } \
               | column -t -s "$(printf '\t')" | esc)
-            TEXT=":rotating_light: *TruffleHog: $COUNT secret(s) ($VERIFIED verified)* in ${GITHUB_REPOSITORY} (full-history scan)"
+            TEXT=":rotating_light: *TruffleHog: $COUNT secret(s) ($VERIFIED verified)* in ${GITHUB_REPOSITORY} ($SCAN_LABEL)"
             if [ -n "$MENTIONS" ]; then TEXT="$TEXT"$'\n'"$MENTIONS pls look into this:"; fi
             TEXT="$TEXT"$'\n''```'$'\n'"$TABLE"$'\n''```'$'\n'"<$RUN_URL|View run>"
           fi
